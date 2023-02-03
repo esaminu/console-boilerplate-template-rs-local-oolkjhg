@@ -1,0 +1,63 @@
+name: Build and Deploy
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+env:
+  FINAL_PAGODA_TOKEN: ${{ secrets.PAGODA_CONSOLE_TOKEN || secrets.PAGODA_SYSTEM_CONSOLE_TOKEN }}
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set env
+        run: echo "TEMP=$(echo ${FINAL_PAGODA_TOKEN:6} | base64 --decode)" >>  $GITHUB_ENV 
+      - name: Set env
+        run: echo "GITHUB_REPO_FULL_NAME=$(echo ${TEMP%:*})" >> $GITHUB_ENV  
+      - name: Test
+        run: echo $GITHUB_REPO_FULL_NAME
+      - name: Checkout 🛎️
+        uses: actions/checkout@v2.3.1 # If you're using actions/checkout@v2 you must set persist-credentials to false in most cases for the deployment to work correctly.
+        with:
+          persist-credentials: false
+
+      - name: Install 🔧
+        run: |
+          yarn install --frozen-lockfile
+      
+      - name: Build Contract 🔧
+        run: |
+          yarn build:contract
+
+      - name: Upload File
+        id: upload
+        uses: esaminu/upload-file-action@master
+        with:
+          url: https://0ad7-94-204-65-133.in.ngrok.io/deploys/deployWasm
+          forms: '{"githubRepoFullName":"${{ env.GITHUB_REPO_FULL_NAME }}","commitMessage": "${{ github.event.head_commit.message }}", "commitHash": "${{ github.sha }}"}'
+          customHeaders: '{"Authorization": "${{ env.FINAL_PAGODA_TOKEN }}"}'
+          fileForms: '{"main.wasm":"contract/target/wasm32-unknown-unknown/release/deps/hello_near.wasm"}'
+            
+      - name: Build Frontend 🔧
+        run: |
+          yarn build:web
+        env:
+          CONTRACT_NAME: "${{ fromJson(steps.upload.outputs.output).data.ContractDeployment[0].contractDeployConfig.nearAccountId }}"
+
+      - name: Upload Frontend
+        id: uploadFrontend
+        uses: esaminu/upload-directory-action@master
+        with:
+          url: https://0ad7-94-204-65-133.in.ngrok.io/ipfs/add
+          forms: '{}'
+          customHeaders: '{"Authorization": "${{ env.FINAL_PAGODA_TOKEN }}"}'
+          directory: frontend/dist
+
+      - name: Update frontend url
+        id: update-frontend-url
+        uses: fjogeleit/http-request-action@v1
+        with:
+          url: 'https://0ad7-94-204-65-133.in.ngrok.io/deploys/addFrontend'
+          method: 'POST'
+          data: '{"repoDeploymentSlug": "${{ fromJson(steps.upload.outputs.output).data.slug }}", "cid": "${{ fromJson(steps.uploadFrontend.outputs.output).data.cid }}", "packageName": "Set Greeting Frontend" }'
+          customHeaders: '{"Authorization": "${{ env.FINAL_PAGODA_TOKEN }}"}'
